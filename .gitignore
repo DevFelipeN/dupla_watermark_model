@@ -1,0 +1,16 @@
+Dataset
+results/
+output_grade/
+output_fragil/
+*.pth
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+# checkpoints do modelo atual (exceções à regra *.pth)
+!output/checkpoints/v3_robusta_final.pth
+!output/checkpoints/semifragil_final.pth
+# logs do TensorBoard
+output/logs/

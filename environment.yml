@@ -1,0 +1,30 @@
+# Ambiente usado para treinar e avaliar a versão 3 (testado com uma RTX 3090, CUDA 12.8).
+# Para outra versão de CUDA, troque o índice do PyTorch (cu128) pelo da sua placa:
+# https://pytorch.org/get-started/locally/
+name: watermark-v3
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - torch==2.11.0
+      - torchvision==0.26.0
+      - pytorch_wavelets==1.3.0
+      - PyWavelets==1.9.0
+      - torch-dct==0.1.6
+      - kornia==0.8.3
+      - lpips==0.1.4
+      - DISTS-pytorch==0.1
+      - torchmetrics==1.9.0
+      - bchlib==2.1.2
+      - numpy==2.4.4
+      - scipy==1.17.1
+      - pandas==3.0.5
+      - opencv-python==4.13.0.92
+      - pillow==12.2.0
+      - tabulate==0.10.0
+      - tqdm==4.67.3
+      - tensorboard==2.20.0
+      - matplotlib==3.10.9
