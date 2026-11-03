@@ -47,6 +47,17 @@ A robusta fica congelada. A semi-frágil começa dos pesos da robusta v3 e, a ca
 
 **Nenhum dos 7 deepfakes reais entra no treino.** Todos ficam para a avaliação, o que mostra se a detecção generaliza.
 
+### Elipse posicionada pelo SCRFD (em desenvolvimento)
+
+Por padrão, o treino agora posiciona a elipse da semi-frágil pelo rosto detectado (`--elipse scrfd`), em vez de deixá-la fixa no centro:
+
+1. `preparar_pontos_scrfd.py` detecta o rosto de cada imagem com o SCRFD-10G e salva os 5 pontos (olhos, nariz, cantos da boca) em `pontos_scrfd/train.npz` e `pontos_scrfd/val.npz`. O **molde** é a posição média desses pontos no CelebA-HQ (onde a elipse foi desenhada).
+2. Para cada imagem, uma transformação de semelhança leva o molde aos pontos detectados, e a mesma transformação leva a elipse até o rosto (`pontos_rosto.mascara_por_pontos`). As regiões das manipulações (miolo, olhos, boca) acompanham o rosto do mesmo jeito.
+3. **Aumento geométrico:** a cada lote, 70% das imagens (`--aug_geometrica`) são reduzidas (0,5–1,0), giradas (±15°) e deslocadas, com os pontos junto, sobre o fundo de outra imagem do lote. Sem isso a rede só veria rostos no centro: o teste em `detetores_rostos/elipse_movel.py` mostrou que o modelo treinado com a elipse fixa dá 44% de falso positivo quando o rosto está fora do centro.
+4. A validação de cada época mede os rostos centrados e os deslocados (chaves `deslocado | …`), e a nota da melhor época usa os dois.
+
+A robusta continua na imagem inteira, sem detector. A leitura das duas marcas também é feita na imagem inteira, sem detector: o SCRFD só decide onde a semi-frágil é escrita. Com `--elipse fixa`, o treino é o do modelo anterior.
+
 No fim de cada época, uma validação rápida (200 imagens do `val`) mostra a acurácia da semi-frágil e da robusta sem ataque, com JPEG 50, resize 0,5, blur e após cada manipulação, além do PSNR, e salva a melhor época em `<nome>_melhor.pth`.
 
 ## Modelo atual
@@ -153,9 +164,17 @@ O primeiro salva a original, a imagem só com a robusta e a imagem com as duas m
 
 ### Treino
 
+Uma vez só, os pontos do SCRFD (≈10 min; ambiente `detectores`, com onnxruntime e insightface, e o modelo `scrfd_10g.onnx` em `../../detetores_rostos/modelos/` ou passado em `--modelo`):
+
+```bash
+~/miniconda3/envs/detectores/bin/python preparar_pontos_scrfd.py
+```
+
+Depois, o treino (ambiente `watermark-v3`):
+
 ```bash
 python train_fragil.py --dataset_path Dataset/celeba_hq/train \
-    --output output_fragil/fragil_alpha5 --num_epochs 20
+    --output output_fragil/fragil_scrfd --num_epochs 20
 ```
 
 Opções principais:
@@ -164,6 +183,10 @@ Opções principais:
 |---|---|---|
 | `--robust_checkpoint` | `output/checkpoints/v3_robusta_final.pth` | marca robusta (congelada) |
 | `--alpha` | 5 | força da semi-frágil (fixa) |
+| `--elipse` | `scrfd` | `scrfd` = elipse pelo rosto detectado; `fixa` = no centro (modelo anterior) |
+| `--pontos`, `--val_pontos` | `pontos_scrfd/train.npz`, `pontos_scrfd/val.npz` | pontos do SCRFD |
+| `--aug_geometrica` | 0,7 | fração das imagens reduzidas, giradas e deslocadas a cada lote |
+| `--aug_escala`, `--aug_rotacao` | `0.5,1.0`, 15 | faixa de escala e rotação máxima (graus) do aumento |
 | `--mask_floor` | 0 | fração da semi-frágil fora do rosto (0 = só no rosto) |
 | `--fragility_weight` | 1,0 | peso de "não ler" nas manipulações |
 | `--no_mark_weight` | 0,5 | peso de "não ler" sem a marca semi-frágil |
@@ -255,6 +278,8 @@ A semi-frágil custa ≈1,7 dB de PSNR, concentrados no rosto.
 | Arquivo | Função |
 |---|---|
 | `marca_fragil.py` | elipse do rosto, inserção da semi-frágil, manipulações de treino e chave |
+| `pontos_rosto.py` | elipse posicionada pelos pontos do rosto e aumento geométrico do treino |
+| `preparar_pontos_scrfd.py` | detecta os 5 pontos do rosto (SCRFD-10G) de cada imagem e salva em `pontos_scrfd/` |
 | `train_fragil.py` | treino da semi-frágil com a robusta congelada |
 | `avaliar_marca_dupla.py` | avaliação da marca dupla (origem + detecção) com 16 ataques e, opcionalmente, 7 deepfakes |
 | `attacks.py` | ataques da versão 3 + os conjuntos `benigno` e `benigno_realista` |
