@@ -10,6 +10,11 @@ class SEBlock(nn.Module):
     Squeeze-and-Excitation: aprende a pesar cada canal (sub-banda)
     de acordo com sua confiabilidade sob o ataque atual, em vez de
     tratar todos os canais de entrada com peso fixo.
+
+    Não é mais usado nos modelos novos: com 3 canais, a camada do meio
+    tem um único neurônio, que nos modelos treinados ficou sempre
+    negativo (zerado pelo ReLU) — o SE virou 3 pesos fixos. Fica aqui
+    só para carregar os checkpoints antigos (v3 e semi-frágeis).
     """
 
     def __init__(self, channels, reduction=4):
@@ -103,7 +108,8 @@ class WatermarkExtraction(
 
         self.dwt = DWTForward(J=1, wave="haar")
 
-        self.se_in = SEBlock(channels=in_ch)
+        # Sem SE; checkpoints antigos com SE o recriam em load_state_dict
+        self.se_in = None
 
         # -------------------------
         # Encoder
@@ -145,6 +151,13 @@ class WatermarkExtraction(
         else:
             self.out_conv = nn.Conv2d(32, 1, kernel_size=1)
 
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        # checkpoint antigo (com SE): recria o bloco para os pesos caberem
+        if self.se_in is None and any(k.startswith("se_in.") for k in state_dict):
+            in_ch = self.enc1.block[0].in_channels
+            self.se_in = SEBlock(channels=in_ch).to(self.enc1.block[0].weight.device)
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
+
     def extract_frequency_tensor(self, images, block_size=8):
 
         if images.max() <= 1.0:
@@ -172,7 +185,8 @@ class WatermarkExtraction(
 
     def forward(self, x):
         x = self.extract_frequency_tensor(x)
-        x = self.se_in(x)
+        if self.se_in is not None:
+            x = self.se_in(x)
 
         # -------------------------
         # Encoder
