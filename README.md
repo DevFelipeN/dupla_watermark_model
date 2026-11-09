@@ -252,27 +252,27 @@ A semi-frágil custa ≈1,6 dB de PSNR, concentrados no rosto. A linha "só robu
 
 ### Ataques comuns (2.000 imagens)
 
-"Robusta" é a Bit Accuracy da marca de origem; "Concordância" é a semi-frágil lida × esperada; "Alterada" é a fração de imagens que a verificação marcaria como alteradas (aqui, **falso positivo**).
+"Robusta" é a Bit Accuracy da marca de origem; "Semi-frágil" é a Bit Accuracy da semi-frágil (bits lidos × bits inseridos); "Concordância" é a semi-frágil lida × esperada (robusta lida XOR chave), que é o que a verificação usa; "Alterada" é a fração de imagens que a verificação marcaria como alteradas (aqui, **falso positivo**).
 
-| Ataque | Parâmetro | Robusta | Concordância | Alterada |
-|---|---|---|---|---|
-| Nenhum | – | 100% | 99,93% | 0% |
-| JPEG | Q=75 | 99,96% | 98,31% | 0,1% |
-| JPEG | Q=50 | 99,43% | 93,31% | 1,05% |
-| JPEG | Q=30 | 95,32% | 78,76% | 45,7% |
-| Blur | σ=2 | 99,88% | 97,29% | 0,35% |
-| Median | 3×3 | 99,87% | 97,38% | 0,45% |
-| Median | 5×5 | 99,41% | 89,69% | 7,25% |
-| Ruído | σ=0,02 | 99,998% | 99,68% | 0,05% |
-| Ruído | σ=0,05 | 99,79% | 94,65% | 0,2% |
-| Salt & pepper | 1% | 99,99% | 97,36% | 0% |
-| Salt & pepper | 5% | 99,39% | 79,18% | 44,05% |
-| Dropout | 5% | 99,85% | 80,30% | 40,05% |
-| Dropout | 10% | 99,55% | 72,30% | 70,05% |
-| Dropout | 20% | 97,99% | 65,13% | 88,25% |
-| Resize | 0,5 | 99,65% | 93,87% | 2,0% |
-| Resize | 0,3 | 98,05% | 82,91% | 27,15% |
-| Controle: só a robusta | – | 100% | 49,96% | 100% |
+| Ataque | Parâmetro | Robusta | Semi-frágil | Concordância | Alterada |
+|---|---|---|---|---|---|
+| Nenhum | – | 100% | 99,93% | 99,93% | 0% |
+| JPEG | Q=75 | 99,96% | 98,35% | 98,31% | 0,1% |
+| JPEG | Q=50 | 99,43% | 93,81% | 93,31% | 1,05% |
+| JPEG | Q=30 | 95,32% | 81,79% | 78,76% | 45,7% |
+| Blur | σ=2 | 99,88% | 97,41% | 97,29% | 0,35% |
+| Median | 3×3 | 99,87% | 97,49% | 97,38% | 0,45% |
+| Median | 5×5 | 99,41% | 90,12% | 89,69% | 7,25% |
+| Ruído | σ=0,02 | 99,998% | 99,68% | 99,68% | 0,05% |
+| Ruído | σ=0,05 | 99,79% | 94,84% | 94,65% | 0,2% |
+| Salt & pepper | 1% | 99,99% | 97,37% | 97,36% | 0% |
+| Salt & pepper | 5% | 99,39% | 79,53% | 79,18% | 44,05% |
+| Dropout | 5% | 99,85% | 80,38% | 80,30% | 40,05% |
+| Dropout | 10% | 99,55% | 72,45% | 72,30% | 70,05% |
+| Dropout | 20% | 97,99% | 65,65% | 65,13% | 88,25% |
+| Resize | 0,5 | 99,65% | 94,14% | 93,87% | 2,0% |
+| Resize | 0,3 | 98,05% | 84,15% | 82,91% | 27,15% |
+| Controle: só a robusta | – | 100% | 49,96% | 49,96% | 100% |
 
 - A robusta continua acima de 95% de Bit Accuracy em todos os ataques, com a semi-frágil por cima.
 - Nas edições comuns e leves (JPEG 75 e 50, blur, median 3, ruído, salt & pepper 1%, resize 0,5), a semi-frágil quase nunca acusa alteração (≤2%).
@@ -283,15 +283,15 @@ A semi-frágil custa ≈1,6 dB de PSNR, concentrados no rosto. A linha "só robu
 
 "Alterada" aqui é a **taxa de detecção**.
 
-| Deepfake | Robusta (origem) | Concordância | Alterada |
-|---|---|---|---|
-| SimSwap | 99,95% | 48,68% | 100% |
-| InSwapper | 99,67% | 49,57% | 100% |
-| LivePortrait | 85,35% | 52,42% | 96,5% |
-| DiffAE (Young) | 99,95% | 87,18% | 27,5% |
-| BlendFace | 100% | 90,10% | 18,0% |
-| HiSD (óculos) | 99,38% | 91,35% | 3,0% |
-| StarGAN (Male) | 99,75% | 95,05% | 1,0% |
+| Deepfake | Robusta (origem) | Semi-frágil | Concordância | Alterada |
+|---|---|---|---|---|
+| SimSwap | 99,95% | 48,67% | 48,68% | 100% |
+| InSwapper | 99,67% | 49,67% | 49,57% | 100% |
+| LivePortrait | 85,35% | 51,57% | 52,42% | 96,5% |
+| DiffAE (Young) | 99,95% | 87,23% | 87,18% | 27,5% |
+| BlendFace | 100% | 90,10% | 90,10% | 18,0% |
+| HiSD (óculos) | 99,38% | 91,83% | 91,35% | 3,0% |
+| StarGAN (Male) | 99,75% | 95,30% | 95,05% | 1,0% |
 
 - **Troca de rosto completa** (SimSwap, InSwapper) e **reencenação** (LivePortrait) são detectadas em quase todas as imagens, e a robusta continua dizendo a origem.
 - **DiffAE** e **BlendFace** são detectados em parte.
