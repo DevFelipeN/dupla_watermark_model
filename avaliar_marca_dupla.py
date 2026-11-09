@@ -357,7 +357,7 @@ def main():
     tabela.to_csv(os.path.join(args.output, "media_per_attack.csv"), index=False)
 
     mostrar = tabela.copy()
-    for c, f in {"BER": "{:.4f}", "BER Std": "{:.4f}", "Bit Accuracy": "{:.4f}", "Accuracy (%)": "{:.2f}%",
+    for c, f in {"BER": "{:.2f}", "BER Std": "{:.2f}", "Bit Accuracy": "{:.4f}", "Accuracy (%)": "{:.2f}%",
                  "PSNR": "{:.2f}", "SSIM": "{:.4f}",
                  "LPIPS": "{:.4f}", "DISTS": "{:.4f}", "Semi-frágil Acc (%)": "{:.2f}%",
                  "Concordância (%)": "{:.2f}%", "Alterada (%)": "{:.2f}%"}.items():
