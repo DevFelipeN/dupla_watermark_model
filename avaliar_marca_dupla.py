@@ -57,11 +57,12 @@ from deepfake_attack import DeepFakeAttack, DEEPFAKE_ROOT
 from watermark_embedding import WatermarkEmbedding, watermark_embedding_tensor
 from watermark_extraction import WatermarkExtraction
 from marca_fragil import mascara_rosto, inserir_fragil, chave_fragil, mensagem_fragil
+from pontos_rosto import carregar_pontos, pontos_do_lote, mascara_por_pontos
 from train_fragil import carregar_robusta, ROBUSTA_PADRAO
 
 # 20 identidades de origem usadas pelos deepfakes de troca de rosto (só com deepfakes)
 ORIGENS_FACESWAP_DIR = os.path.join(DEEPFAKE_ROOT, "origens_faceswap")
-SEMIFRAGIL_PADRAO = "output/checkpoints/semifragil_final.pth"
+SEMIFRAGIL_PADRAO = "output/checkpoints/semifragil.pth"
 
 IMAGE_SIZE = 256
 
@@ -145,6 +146,9 @@ def main():
     parser.add_argument("--alpha", type=float, default=None, help="Alpha da semi-frágil (padrão: o do checkpoint)")
     parser.add_argument("--sem_deepfakes", action="store_true", help="Só os 16 ataques (rápido)")
     parser.add_argument("--deepfakes", default=",".join(DEEPFAKES), help="Deepfakes a rodar, separados por vírgula")
+    parser.add_argument("--pontos", default="pontos_scrfd/val.npz",
+                        help="Pontos do SCRFD das imagens (preparar_pontos_scrfd.py); usados quando o checkpoint "
+                             "da semi-frágil foi treinado com a elipse pelo SCRFD")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -168,9 +172,14 @@ def main():
     ext_f = WatermarkExtraction(grid, IMAGE_SIZE, use_hh=False, num_bits=num_bits).to(device).eval()
     ext_f.load_state_dict(ck_f["extraction_model"])
     mascara = mascara_rosto(IMAGE_SIZE).to(device)
+    elipse = ck_f.get("elipse", "fixa")
+    if elipse in ("scrfd", "posicao"):
+        # a elipse de cada imagem segue o rosto achado pelo SCRFD (posicao: só desloca, tamanho fixo)
+        pontos_val, _ = carregar_pontos(args.pontos)
+        molde = np.array(ck_f["molde"], dtype=np.float32)
     piso = ck_f.get("mask_floor", 0.0)
     chave = chave_fragil(num_bits).to(device)
-    print(f"Robusta: {robusta_path} (alpha {emb_r.alpha}) | semi-frágil: {args.fragil} (alpha {emb_f.alpha}, piso {piso})")
+    print(f"Robusta: {robusta_path} (alpha {emb_r.alpha}) | semi-frágil: {args.fragil} (alpha {emb_f.alpha}, piso {piso}, elipse {elipse})")
 
     def ler_robusta(x):
         with torch.no_grad():
@@ -214,6 +223,9 @@ def main():
         m_f = mensagem_fragil(m_r, chave)
         with torch.no_grad():
             x_r = quantize(watermark_embedding_tensor(x, m_r, emb_r)[0])
+            if elipse in ("scrfd", "posicao"):
+                pts = pontos_do_lote([os.path.basename(path)], pontos_val, molde).to(device)
+                mascara = mascara_por_pontos(pts, torch.from_numpy(molde), IMAGE_SIZE, so_posicao=elipse == "posicao")[0]
             x_d = quantize(inserir_fragil(x_r, m_f, emb_f, mascara, piso)[0])
         originais[name], so_robusta[name], duplas[name], mensagens[name] = x, x_r, x_d, (m_r, m_f)
 
@@ -345,7 +357,7 @@ def main():
     tabela.to_csv(os.path.join(args.output, "media_per_attack.csv"), index=False)
 
     mostrar = tabela.copy()
-    for c, f in {"BER": "{:.4f}", "BER Std": "{:.4f}", "Bit Accuracy": "{:.4f}", "Accuracy (%)": "{:.2f}%",
+    for c, f in {"BER": "{:.2f}", "BER Std": "{:.2f}", "Bit Accuracy": "{:.4f}", "Accuracy (%)": "{:.2f}%",
                  "PSNR": "{:.2f}", "SSIM": "{:.4f}",
                  "LPIPS": "{:.4f}", "DISTS": "{:.4f}", "Semi-frágil Acc (%)": "{:.2f}%",
                  "Concordância (%)": "{:.2f}%", "Alterada (%)": "{:.2f}%"}.items():

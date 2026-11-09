@@ -10,6 +10,11 @@ class SEBlock(nn.Module):
     Squeeze-and-Excitation: aprende a pesar cada canal (sub-banda)
     de acordo com sua confiabilidade sob o ataque atual, em vez de
     tratar todos os canais de entrada com peso fixo.
+
+    Não é mais usado nos modelos novos: com 3 canais, a camada do meio
+    tem um único neurônio, que nos modelos treinados ficou sempre
+    negativo (zerado pelo ReLU) — o SE virou 3 pesos fixos. Fica aqui
+    só para carregar os checkpoints antigos (v3 e semi-frágeis).
     """
 
     def __init__(self, channels, reduction=4):
@@ -103,7 +108,12 @@ class WatermarkExtraction(
 
         self.dwt = DWTForward(J=1, wave="haar")
 
-        self.se_in = SEBlock(channels=in_ch)
+        # Sem SE; checkpoints antigos com SE o recriam em load_state_dict
+        self.se_in = None
+
+        # Escala fixa por sub-banda na entrada (opcional, definir_escala_entrada):
+        # alpha × peso de cada sub-banda, como no inseridor
+        self.register_buffer("escala_entrada", None)
 
         # -------------------------
         # Encoder
@@ -145,6 +155,22 @@ class WatermarkExtraction(
         else:
             self.out_conv = nn.Conv2d(32, 1, kernel_size=1)
 
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        # checkpoint antigo (com SE): recria o bloco para os pesos caberem
+        if self.se_in is None and any(k.startswith("se_in.") for k in state_dict):
+            in_ch = self.enc1.block[0].in_channels
+            self.se_in = SEBlock(channels=in_ch).to(self.enc1.block[0].weight.device)
+        # checkpoint treinado com escala na entrada: cria o buffer para recebê-la
+        if self.escala_entrada is None and "escala_entrada" in state_dict:
+            self.escala_entrada = torch.zeros_like(state_dict["escala_entrada"]).to(self.enc1.block[0].weight.device)
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
+
+    def definir_escala_entrada(self, escala):
+        """Multiplica cada sub-banda de entrada por um valor fixo (não treinado).
+        escala: um valor por canal de entrada (LL, LH, HL[, HH]); fica salva no checkpoint."""
+        escala = torch.as_tensor(escala, dtype=torch.float32, device=self.enc1.block[0].weight.device)
+        self.escala_entrada = escala.view(1, -1, 1, 1)
+
     def extract_frequency_tensor(self, images, block_size=8):
 
         if images.max() <= 1.0:
@@ -172,7 +198,10 @@ class WatermarkExtraction(
 
     def forward(self, x):
         x = self.extract_frequency_tensor(x)
-        x = self.se_in(x)
+        if self.se_in is not None:
+            x = self.se_in(x)
+        if self.escala_entrada is not None:
+            x = x * self.escala_entrada
 
         # -------------------------
         # Encoder

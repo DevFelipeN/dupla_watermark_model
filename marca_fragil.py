@@ -92,20 +92,20 @@ def _casar_cor(fonte, alvo, m):
     return ((fonte - mu_f) / sd_f * sd_a + mu_a).clamp(0, 1)
 
 
-def troca_rosto(imagens, mascara, outras):
+def troca_rosto(imagens, mascara, outras, geo=None):
     """Face swap de mentira: cola o rosto de outra imagem do batch (que também
     tem as suas marcas, com outras mensagens), com a cor ajustada e borda suave."""
     B = imagens.shape[0]
-    m = _mascara_variada(mascara, B)
+    m = _rosto_variado(mascara, B, geo)
     fonte = _casar_cor(outras, imagens, m)
     return imagens * (1 - m) + fonte * m
 
 
-def regenera_rosto(imagens, mascara, outras=None):
+def regenera_rosto(imagens, mascara, outras=None, geo=None):
     """Rosto "regenerado": a região do rosto perde os detalhes finos (reduz
     para 1/4 e volta) e ganha ruído novo, como a saída de um gerador."""
     B, _, H, W = imagens.shape
-    m = _mascara_variada(mascara, B)
+    m = _rosto_variado(mascara, B, geo)
     fator = random.choice([0.2, 0.25, 0.33])
     baixa = F.interpolate(imagens, scale_factor=fator, mode="bilinear", align_corners=False)
     regen = F.interpolate(baixa, size=(H, W), mode="bilinear", align_corners=False)
@@ -113,12 +113,12 @@ def regenera_rosto(imagens, mascara, outras=None):
     return imagens * (1 - m) + regen * m
 
 
-def deforma_rosto(imagens, mascara, outras=None):
+def deforma_rosto(imagens, mascara, outras=None, geo=None):
     """Reencenação de mentira: desloca os pixels do rosto com um campo de
     deformação suave e aleatório (muda expressão/pose sem trocar o rosto)."""
     B, _, H, W = imagens.shape
     dev = imagens.device
-    m = _mascara_variada(mascara, B)
+    m = _rosto_variado(mascara, B, geo)
     campo = torch.randn(B, 2, 4, 4, device=dev) * random.uniform(0.03, 0.06)
     campo = F.interpolate(campo, size=(H, W), mode="bicubic", align_corners=False)
     base = F.affine_grid(torch.eye(2, 3, device=dev).unsqueeze(0).expand(B, -1, -1),
@@ -127,10 +127,10 @@ def deforma_rosto(imagens, mascara, outras=None):
     return F.grid_sample(imagens, grid, mode="bilinear", padding_mode="reflection", align_corners=False)
 
 
-def mistura_rosto(imagens, mascara, outras):
+def mistura_rosto(imagens, mascara, outras, geo=None):
     """Troca parcial: mistura os dois rostos (como um swap mal feito ou morphing)."""
     B = imagens.shape[0]
-    m = _mascara_variada(mascara, B) * random.uniform(0.5, 0.9)
+    m = _rosto_variado(mascara, B, geo) * random.uniform(0.5, 0.9)
     return imagens * (1 - m) + _casar_cor(outras, imagens, m) * m
 
 
@@ -138,13 +138,32 @@ def _elipse(size, cx, cy, ax, ay, nitidez, device):
     return mascara_rosto(size, cx, cy, ax, ay, nitidez).to(device)
 
 
-def troca_miolo(imagens, mascara, outras):
+def _rosto_variado(mascara, B, geo):
+    """Elipse do rosto com variação aleatória. Com geo, a variação é feita no
+    rosto alinhado e depois levada ao rosto (escalar em torno do centro da
+    imagem deslocaria a elipse de um rosto que não está no centro)."""
+    if geo is None:
+        return _mascara_variada(mascara, B)
+    return _no_rosto(_mascara_variada(mascara_rosto(mascara.shape[-1]).to(mascara.device), B), geo)
+
+
+def _no_rosto(regiao, geo):
+    """Leva uma região desenhada no rosto alinhado até o rosto de cada imagem
+    (geo de pontos_rosto.mascara_por_pontos). Sem geo, fica onde está (rosto no centro)."""
+    if geo is None:
+        return regiao
+    B, H = geo.shape[0], regiao.shape[-1]
+    grid = F.affine_grid(geo, (B, 1, H, H), align_corners=False)
+    return F.grid_sample(regiao.expand(B, -1, -1, -1), grid, align_corners=False)
+
+
+def troca_miolo(imagens, mascara, outras, geo=None):
     """Como o BlendFace: troca só o miolo do rosto (olhos, nariz e boca), com
     borda bem suave, mantendo contorno, testa e queixo da imagem original."""
     B, _, H, W = imagens.shape
     miolo = _elipse(H, 0.50, 0.53, random.uniform(0.18, 0.24), random.uniform(0.22, 0.28),
                     random.uniform(4.0, 6.0), imagens.device)
-    m = _mascara_variada(miolo, B)
+    m = _no_rosto(_mascara_variada(miolo, B), geo)
     return imagens * (1 - m) + _casar_cor(outras, imagens, m) * m
 
 
@@ -153,12 +172,12 @@ def _passa_baixa(x, sigma):
     return TF.gaussian_blur(x, kernel_size=k, sigma=sigma)
 
 
-def troca_detalhes(imagens, mascara, outras):
+def troca_detalhes(imagens, mascara, outras, geo=None):
     """Como o DiffAE/StarGAN: o rosto mantém cor e forma (frequências baixas),
     mas os detalhes finos (frequências altas, onde a marca fica) são refeitos;
     aqui vêm de outra imagem. Visualmente quase não muda."""
     B = imagens.shape[0]
-    m = _mascara_variada(mascara, B)
+    m = _rosto_variado(mascara, B, geo)
     sigma = random.uniform(0.8, 1.5)
     baixa = _passa_baixa(imagens, sigma)
     detalhes = outras - _passa_baixa(outras, sigma)
@@ -176,13 +195,13 @@ _REGIOES = {
 }
 
 
-def edita_regiao(imagens, mascara, outras):
+def edita_regiao(imagens, mascara, outras, geo=None):
     """Como o HiSD (óculos) ou edição de atributo: só uma região pequena
     (olhos, boca ou nariz) vem de outra imagem."""
     B, _, H, W = imagens.shape
     cx, cy, ax, ay = random.choice(list(_REGIOES.values()))
     regiao = _elipse(H, cx, cy, ax, ay, random.uniform(5.0, 8.0), imagens.device)
-    m = _mascara_variada(regiao, B)
+    m = _no_rosto(_mascara_variada(regiao, B), geo)
     return imagens * (1 - m) + _casar_cor(outras, imagens, m) * m
 
 

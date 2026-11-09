@@ -19,6 +19,17 @@ CNN, extrator U-Net), mas:
       (só a robusta), para ele não aprender a "ler" a marca robusta;
     - uma perda extra mantém a marca robusta legível com a semi-frágil por cima.
 
+Posição da elipse (--elipse):
+    scrfd (padrão)  a elipse é levada até o rosto de cada imagem pelos 5 pontos do
+                    SCRFD (pontos_scrfd/*.npz, de preparar_pontos_scrfd.py), e uma
+                    fração das imagens (--aug_geometrica) é reduzida, girada e
+                    deslocada, com os pontos junto, para a semi-frágil aprender a
+                    ler a marca com o rosto em qualquer posição
+    posicao         o SCRFD só diz ONDE está o rosto: a elipse é deslocada até ele,
+                    com o tamanho e a inclinação da fixa; o aumento geométrico só
+                    desloca as imagens (--aug_deslocamento), sem reduzir nem girar
+    fixa            a elipse fixa no centro (como o modelo anterior)
+
 Nenhum deepfake real é usado no treino: os 7 ficam para a avaliação
 (avaliar_marca_dupla.py), o que mostra se a detecção generaliza.
 
@@ -27,9 +38,13 @@ independentemente. Na avaliação a semi-frágil é a robusta XOR uma chave
 (marca_fragil.chave_fragil): quem verifica lê a robusta, calcula a semi-frágil
 esperada e compara.
 
-Exemplo (a partir dos pesos da robusta v3, alpha 5, como o modelo atual):
+Exemplo (a partir dos pesos da robusta v3, alpha 5, elipse pelo SCRFD):
     python train_fragil.py --dataset_path Dataset/celeba_hq/train \
-        --output output_fragil/fragil_alpha5_v2 --num_epochs 20
+        --output output_fragil/fragil_scrfd --num_epochs 20
+
+Só a posição do rosto (elipse do mesmo tamanho para todas):
+    python train_fragil.py --dataset_path Dataset/celeba_hq/train \
+        --output output_fragil/fragil_posicao --num_epochs 20 --elipse posicao
 """
 
 import os
@@ -51,12 +66,13 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 
 from attacks import AttackLayer, ATTACK_SETS
-from train import WatermarkDataset, find_images, set_seed, seed_worker
+from train import find_images, set_seed, seed_worker
 from watermark_embedding import WatermarkEmbedding, watermark_embedding_tensor
 from watermark_extraction import WatermarkExtraction
 from marca_fragil import mascara_rosto, inserir_fragil, MANIPULACOES
+from pontos_rosto import carregar_pontos, pontos_do_lote, mascara_por_pontos, aumento_geometrico
 
-ROBUSTA_PADRAO = "output/checkpoints/v3_robusta_final.pth"
+ROBUSTA_PADRAO = "output/checkpoints/robusta.pth"
 
 
 def carregar_robusta(caminho, resolucao, device):
@@ -72,6 +88,35 @@ def carregar_robusta(caminho, resolucao, device):
     return ck, emb, ext
 
 
+class ImagensComNome(torch.utils.data.Dataset):
+    """Imagem e nome do arquivo (para achar os pontos do rosto)."""
+    def __init__(self, paths, transform):
+        self.paths, self.transform = paths, transform
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, i):
+        return self.transform(Image.open(self.paths[i]).convert("RGB")), os.path.basename(self.paths[i])
+
+
+def preparar_lote(x, nomes, geo_ctx, args, aumentar):
+    """Devolve (imagens, máscara da semi-frágil, geo, outras). Com a elipse pelo
+    SCRFD, a máscara segue os pontos de cada imagem e, se aumentar > 0, parte do
+    lote é reduzida, girada e deslocada. outras = de onde as manipulações tiram
+    o rosto colado (outra imagem do lote, com o mesmo movimento)."""
+    outras = x.roll(1, 0)
+    if geo_ctx is None:
+        return x, mascara_rosto(x.shape[-1]).to(x.device), None, outras
+    pontos, molde = geo_ctx
+    pts = pontos_do_lote(nomes, pontos, molde).to(x.device)
+    if aumentar > 0:
+        esc = tuple(float(v) for v in args.aug_escala.split(","))
+        x, pts, outras = aumento_geometrico(x, pts, outras, aumentar, esc, args.aug_rotacao, args.aug_deslocamento)
+    mascara, geo = mascara_por_pontos(pts, torch.from_numpy(molde), x.shape[-1], so_posicao=args.elipse == "posicao")
+    return x, mascara, geo, outras
+
+
 def acuracia(logits, bits):
     return ((logits >= 0).float() == bits).float().mean().item()
 
@@ -82,7 +127,7 @@ def psnr(a, b):
 
 
 @torch.no_grad()
-def validar(val_images, robusta, fragil, mascara, args, device):
+def validar(val_images, val_nomes, geo_ctx, robusta, fragil, args, device):
     """Validação rápida em imagens fixas: a semi-frágil lê depois de ataques benignos
     e não lê depois das manipulações; a robusta continua legível."""
     emb_r, ext_r, emb_f, ext_f = robusta + fragil
@@ -97,28 +142,32 @@ def validar(val_images, robusta, fragil, mascara, args, device):
         soma.setdefault(k, []).append(v)
 
     nb = emb_r.num_bits
-    for i in range(0, len(val_images), args.batch_size):
-        x = val_images[i:i + args.batch_size].to(device)
-        B = x.shape[0]
-        m_r = torch.randint(0, 2, (B, nb), generator=g).float().to(device)
-        m_f = torch.randint(0, 2, (B, nb), generator=g).float().to(device)
-        x_r = watermark_embedding_tensor(x, m_r, emb_r)[0]
-        x_d, _ = inserir_fragil(x_r, m_f, emb_f, mascara, args.mask_floor)
-        x_d = torch.round(x_d * 255) / 255   # como salvar em PNG
-        add("PSNR (original x dupla)", psnr(x_d, x))
-        add("PSNR (só robusta x dupla)", psnr(x_d, x_r))
+    # centrado: o CelebA-HQ como é; deslocado: todas as imagens reduzidas, giradas
+    # e deslocadas (sorteio fixo), só quando a elipse segue o rosto
+    cenarios = [("", 0.0)] + ([("deslocado | ", 1.0)] if geo_ctx is not None else [])
+    for prefixo, aumentar in cenarios:
+        for i in range(0, len(val_images), args.batch_size):
+            x, mascara, geo, outras = preparar_lote(val_images[i:i + args.batch_size].to(device),
+                                                    val_nomes[i:i + args.batch_size], geo_ctx, args, aumentar)
+            B = x.shape[0]
+            m_r = torch.randint(0, 2, (B, nb), generator=g).float().to(device)
+            m_f = torch.randint(0, 2, (B, nb), generator=g).float().to(device)
+            x_r = watermark_embedding_tensor(x, m_r, emb_r)[0]
+            x_d, _ = inserir_fragil(x_r, m_f, emb_f, mascara, args.mask_floor)
+            x_d = torch.round(x_d * 255) / 255   # como salvar em PNG
+            add(prefixo + "PSNR (original x dupla)", psnr(x_d, x))
+            add(prefixo + "PSNR (só robusta x dupla)", psnr(x_d, x_r))
 
-        for nome, (atk, kw) in {"sem ataque": ("none", {}), "JPEG 50": ("jpeg_test", {"quality": 50}),
-                                "resize 0,5": ("resize", {"scale": 0.5}), "blur": ("blur", {"sigma": 2.0})}.items():
-            a = attack_layer(x_d, attack=atk, **kw)[0].clamp(0, 1)
-            add(f"semi-frágil | {nome}", acuracia(ext_f(a), m_f))
-            add(f"robusta | {nome}", acuracia(ext_r(a), m_r))
-        add("semi-frágil | só robusta (sem semi-frágil)", acuracia(ext_f(x_r), m_f))
-        outras = x.roll(1, 0)
-        for nome, fn in MANIPULACOES.items():
-            a = fn(x_d, mascara, outras).clamp(0, 1)
-            add(f"semi-frágil | {nome}", acuracia(ext_f(a), m_f))
-            add(f"robusta | {nome}", acuracia(ext_r(a), m_r))
+            for nome, (atk, kw) in {"sem ataque": ("none", {}), "JPEG 50": ("jpeg_test", {"quality": 50}),
+                                    "resize 0,5": ("resize", {"scale": 0.5}), "blur": ("blur", {"sigma": 2.0})}.items():
+                a = attack_layer(x_d, attack=atk, **kw)[0].clamp(0, 1)
+                add(f"{prefixo}semi-frágil | {nome}", acuracia(ext_f(a), m_f))
+                add(f"{prefixo}robusta | {nome}", acuracia(ext_r(a), m_r))
+            add(f"{prefixo}semi-frágil | só robusta (sem semi-frágil)", acuracia(ext_f(x_r), m_f))
+            for nome, fn in MANIPULACOES.items():
+                a = fn(x_d, mascara, outras, geo=geo).clamp(0, 1)
+                add(f"{prefixo}semi-frágil | {nome}", acuracia(ext_f(a), m_f))
+                add(f"{prefixo}robusta | {nome}", acuracia(ext_r(a), m_r))
 
     random.setstate(rng_state[0]); torch.set_rng_state(rng_state[1]); torch.cuda.set_rng_state_all(rng_state[2])
     emb_f.train(); ext_f.train()
@@ -139,6 +188,20 @@ def main():
     parser.add_argument("--alpha", type=float, default=5.0, help="Força da marca semi-frágil (fixa; 5 no modelo atual)")
     parser.add_argument("--mask_floor", type=float, default=0.0,
                         help="Fração da marca semi-frágil fora do rosto (0 = só no rosto)")
+    parser.add_argument("--elipse", choices=["scrfd", "posicao", "fixa"], default="scrfd",
+                        help="scrfd = elipse levada até o rosto pelos pontos do SCRFD (posição, escala e rotação); "
+                             "posicao = só deslocada até o rosto, tamanho fixo; fixa = elipse fixa no centro")
+    parser.add_argument("--pontos", default="pontos_scrfd/train.npz",
+                        help="Pontos do SCRFD das imagens de treino (preparar_pontos_scrfd.py)")
+    parser.add_argument("--val_pontos", default="pontos_scrfd/val.npz", help="Pontos do SCRFD da validação")
+    parser.add_argument("--aug_geometrica", type=float, default=0.7,
+                        help="Fração das imagens reduzidas, giradas e deslocadas a cada lote (só com --elipse scrfd/posicao)")
+    parser.add_argument("--aug_escala", default=None,
+                        help="Faixa da escala do aumento geométrico (padrão: 0.5,1.0; com --elipse posicao, 1.0,1.0)")
+    parser.add_argument("--aug_rotacao", type=float, default=None,
+                        help="Rotação máxima do aumento geométrico, em graus (padrão: 15; com --elipse posicao, 0)")
+    parser.add_argument("--aug_deslocamento", type=float, default=None,
+                        help="Deslocamento extra máximo do aumento geométrico, em px (padrão: 0; com --elipse posicao, 40)")
     parser.add_argument("--benign_attack_set", choices=list(ATTACK_SETS), default="benigno_realista",
                         help="Ataques que a semi-frágil deve aguentar (ver attacks.ATTACK_SETS)")
     parser.add_argument("--manipulacoes", default=",".join(MANIPULACOES),
@@ -163,6 +226,13 @@ def main():
     parser.add_argument("--cuda", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
+    posicao = args.elipse == "posicao"
+    if args.aug_escala is None:
+        args.aug_escala = "1.0,1.0" if posicao else "0.5,1.0"
+    if args.aug_rotacao is None:
+        args.aug_rotacao = 0.0 if posicao else 15.0
+    if args.aug_deslocamento is None:
+        args.aug_deslocamento = 40.0 if posicao else 0.0
 
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.cuda)
@@ -197,7 +267,18 @@ def main():
         print("Marca semi-frágil começa com os pesos da robusta v3")
     emb_f.alpha = args.alpha
 
-    mascara = mascara_rosto(args.image_resolution).to(device)
+    geo_ctx = val_geo_ctx = None
+    if args.elipse in ("scrfd", "posicao"):
+        pontos, molde = carregar_pontos(args.pontos)
+        geo_ctx = (pontos, molde)
+        val_geo_ctx = (carregar_pontos(args.val_pontos)[0], molde)
+        print(f"Elipse pelo SCRFD ({'só posição, tamanho fixo' if posicao else 'posição, escala e rotação'}): "
+              f"pontos de {len(pontos)} imagens ({args.pontos}) | aumento geométrico em {args.aug_geometrica:.0%} "
+              f"das imagens (escala {args.aug_escala}, rotação ±{args.aug_rotacao:g}°, "
+              f"deslocamento extra ±{args.aug_deslocamento:g} px)")
+    else:
+        molde = None
+        print("Elipse fixa no centro")
     print(f"Robusta (congelada): {args.robust_checkpoint} (alpha {emb_r.alpha})")
     print(f"Semi-frágil: alpha {args.alpha} | piso fora do rosto {args.mask_floor} | "
           f"ataques benignos ({args.benign_attack_set}): {ATTACK_SETS[args.benign_attack_set]}")
@@ -210,12 +291,13 @@ def main():
     paths = find_images(args.dataset_path)
     if args.limit:
         paths = paths[:args.limit]
-    dataset = WatermarkDataset(paths, transform=transform, watermark_size=grid, num_bits=num_bits)
+    dataset = ImagensComNome(paths, transform)
     gen = torch.Generator(); gen.manual_seed(args.seed)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True,
                         worker_init_fn=seed_worker, generator=gen, drop_last=True)
     val_paths = find_images(args.val_path)[:args.val_images]
     val_images = torch.stack([transform(Image.open(p).convert("RGB")) for p in val_paths])
+    val_nomes = [os.path.basename(p) for p in val_paths]
     print(f"Treino: {len(dataset)} imagens | validação rápida: {len(val_images)} imagens")
 
     # -------------------------
@@ -248,9 +330,10 @@ def main():
         emb_f.train(); ext_f.train()
         medias = {}
         bar = tqdm(loader)
-        for images, _ in bar:
+        for images, nomes in bar:
             step += 1
-            x = images.to(device, non_blocking=True)
+            x, mascara, geo, outras = preparar_lote(images.to(device, non_blocking=True), nomes, geo_ctx, args,
+                                                    args.aug_geometrica)
             B = x.shape[0]
             m_r = torch.randint(0, 2, (B, num_bits), device=device).float()
             m_f = torch.randint(0, 2, (B, num_bits), device=device).float()
@@ -268,7 +351,7 @@ def main():
             # 2) manipulação do rosto: a semi-frágil NÃO deve ler. O rosto colado
             # vem de outra imagem SEM marca (como a origem de um face swap real)
             nome_manip = random.choice(manipulacoes)
-            manipulada = MANIPULACOES[nome_manip](x_d, mascara, x.roll(1, 0)).clamp(0, 1)
+            manipulada = MANIPULACOES[nome_manip](x_d, mascara, outras, geo=geo).clamp(0, 1)
             if random.random() < args.benign_after_manip:
                 manipulada = attack_layer(manipulada)[0].clamp(0, 1)
             logits_m = ext_f(manipulada)
@@ -339,29 +422,30 @@ def main():
         # -------------------------
         print("Média da época: " + " | ".join(f"{k} {np.mean(v)*(1 if k.startswith('psnr') else 100):.2f}"
                                               for k, v in medias.items()))
-        val = validar(val_images, (emb_r, ext_r), (emb_f, ext_f), mascara, args, device)
+        val = validar(val_images, val_nomes, val_geo_ctx, (emb_r, ext_r), (emb_f, ext_f), args, device)
         print("Validação (bit acc %, PSNR dB):")
         for k, v in val.items():
-            print(f"    {k:42s} {v if k.startswith('PSNR') else v * 100:7.2f}")
+            print(f"    {k:42s} {v if 'PSNR' in k else v * 100:7.2f}")
             writer.add_scalar("validacao/" + k, v, step)
 
-        salvar(join(CKPTS, EXP + "_model.pth"), emb_f, ext_f, optimizer, args, ck_r, epoch, step, val)
+        salvar(join(CKPTS, EXP + "_model.pth"), emb_f, ext_f, optimizer, args, ck_r, epoch, step, val, molde)
 
         # melhor época: lê bem depois dos ataques comuns e mal depois das
         # manipulações. Só conta com a loss da imagem já no peso máximo, para
         # não escolher uma época de antes do ajuste da qualidade.
-        comuns = [val[f"semi-frágil | {n}"] for n in ("sem ataque", "JPEG 50", "resize 0,5", "blur")]
-        manip = [val[f"semi-frágil | {n}"] for n in MANIPULACOES]
+        prefixos = [""] + (["deslocado | "] if val_geo_ctx is not None else [])
+        comuns = [val[f"{p}semi-frágil | {n}"] for p in prefixos for n in ("sem ataque", "JPEG 50", "resize 0,5", "blur")]
+        manip = [val[f"{p}semi-frágil | {n}"] for p in prefixos for n in MANIPULACOES]
         nota = float(np.mean(comuns) - np.mean(manip))
         writer.add_scalar("validacao/nota", nota, step)
         print(f"Nota da época (média comuns - média manipulações): {nota * 100:.2f}")
         if passos_img >= args.image_loss_ramp and (melhor_nota is None or nota > melhor_nota):
             melhor_nota = nota
-            salvar(join(CKPTS, EXP + "_melhor.pth"), emb_f, ext_f, optimizer, args, ck_r, epoch, step, val)
+            salvar(join(CKPTS, EXP + "_melhor.pth"), emb_f, ext_f, optimizer, args, ck_r, epoch, step, val, molde)
             print(f"Melhor época até agora: {epoch + 1} -> {EXP}_melhor.pth")
 
     caminho = join(CKPTS, EXP + "_final.pth")
-    salvar(caminho, emb_f, ext_f, optimizer, args, ck_r, epoch, step, val)
+    salvar(caminho, emb_f, ext_f, optimizer, args, ck_r, epoch, step, val, molde)
     n = sum(p.numel() for p in params)
     print(f"\nCheckpoint salvo em: {caminho}")
     if melhor_nota is not None:
@@ -370,7 +454,7 @@ def main():
     writer.close()
 
 
-def salvar(caminho, emb_f, ext_f, optimizer, args, ck_r, epoch, step, val):
+def salvar(caminho, emb_f, ext_f, optimizer, args, ck_r, epoch, step, val, molde=None):
     torch.save({
         "tipo": "fragil",
         "alpha": args.alpha,
@@ -378,6 +462,8 @@ def salvar(caminho, emb_f, ext_f, optimizer, args, ck_r, epoch, step, val):
         "num_bits": ck_r["num_bits"],
         "watermark_size": ck_r["watermark_size"],
         "mask_floor": args.mask_floor,
+        "elipse": args.elipse,
+        "molde": None if molde is None else molde.tolist(),
         "robust_checkpoint": args.robust_checkpoint,
         "benign_attack_set": args.benign_attack_set,
         "manipulacoes": args.manipulacoes,
