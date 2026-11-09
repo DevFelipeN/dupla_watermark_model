@@ -72,7 +72,7 @@ from watermark_extraction import WatermarkExtraction
 from marca_fragil import mascara_rosto, inserir_fragil, MANIPULACOES
 from pontos_rosto import carregar_pontos, pontos_do_lote, mascara_por_pontos, aumento_geometrico
 
-ROBUSTA_PADRAO = "output/checkpoints/v3_robusta_final.pth"
+ROBUSTA_PADRAO = "output/checkpoints/robusta.pth"
 
 
 def carregar_robusta(caminho, resolucao, device):

@@ -34,8 +34,11 @@ concordância, robusta) e a tabela de % alterada no terminal.
 
 Ambiente: watermark-v8.
 
-    python comparar_deslocado.py --num_images 500
-    python comparar_deslocado.py --num_images 500 --posicao output_fragil/fragil_posicao/checkpoints/<nome>_melhor.pth
+    python comparar_deslocado.py --num_images 500 --fixa <semi-frágil com elipse fixa>.pth
+    python comparar_deslocado.py --num_images 500 --fixa <fixa>.pth --scrfd <scrfd>.pth
+
+Sem argumentos, avalia só o modelo atual (output/checkpoints/semifragil.pth,
+elipse por posição); --fixa e --scrfd acrescentam modelos para comparar.
 """
 
 import os
@@ -89,10 +92,10 @@ def semente(s):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--fixa", default="output/checkpoints/semifragil_final.pth", help="Semi-frágil com elipse fixa")
-    p.add_argument("--scrfd", default="output_fragil/fragil_scrfd/checkpoints/fragil_28102026_15:34:08_melhor.pth",
-                   help="Semi-frágil com elipse pelo SCRFD")
-    p.add_argument("--posicao", default=None, help="Semi-frágil com elipse só deslocada até o rosto (opcional)")
+    p.add_argument("--fixa", default=None, help="Semi-frágil com elipse fixa (opcional, para comparar)")
+    p.add_argument("--scrfd", default=None, help="Semi-frágil com elipse pelo SCRFD, com escala e rotação (opcional)")
+    p.add_argument("--posicao", default="output/checkpoints/semifragil.pth",
+                   help="Semi-frágil com elipse só deslocada até o rosto (padrão: o modelo atual)")
     p.add_argument("--robusta", default=ROBUSTA_PADRAO)
     p.add_argument("--celeba_val_dir", default="Dataset/celeba_hq/val")
     p.add_argument("--pontos", default="pontos_scrfd/val.npz")
@@ -109,9 +112,8 @@ def main():
 
     ck_r, emb_r, ext_r = carregar_robusta(args.robusta, IMAGE_SIZE, device)
     num_bits = ck_r["num_bits"]
-    modelos = {"fixa": carregar_fragil(args.fixa, ck_r, device), "SCRFD": carregar_fragil(args.scrfd, ck_r, device)}
-    if args.posicao:
-        modelos["posicao"] = carregar_fragil(args.posicao, ck_r, device)
+    caminhos_modelos = {"fixa": args.fixa, "SCRFD": args.scrfd, "posicao": args.posicao}
+    modelos = {nome: carregar_fragil(c, ck_r, device) for nome, c in caminhos_modelos.items() if c}
     pontos, molde = carregar_pontos(args.pontos)
     molde_t = torch.from_numpy(molde)
     chave = chave_fragil(num_bits).to(device)

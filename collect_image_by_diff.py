@@ -19,7 +19,8 @@ semi-frágil é posta por cima da robusta e são salvas:
 
 Exemplo:
     python collect_image_by_diff.py \
-        --models_path output/checkpoints/watermark_Y_DCT_DWT_07102026_08:06:39_final.pth \
+        --models_path output/checkpoints/robusta.pth \
+        --fragil output/checkpoints/semifragil.pth \
         --dataset_dir Dataset/celeba_hq/val \
         --output_dir "my_tests" \
         --reference_name "003251" \

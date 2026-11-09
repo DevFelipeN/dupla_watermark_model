@@ -62,7 +62,7 @@ from train_fragil import carregar_robusta, ROBUSTA_PADRAO
 
 # 20 identidades de origem usadas pelos deepfakes de troca de rosto (só com deepfakes)
 ORIGENS_FACESWAP_DIR = os.path.join(DEEPFAKE_ROOT, "origens_faceswap")
-SEMIFRAGIL_PADRAO = "output/checkpoints/semifragil_final.pth"
+SEMIFRAGIL_PADRAO = "output/checkpoints/semifragil.pth"
 
 IMAGE_SIZE = 256
 
