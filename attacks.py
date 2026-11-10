@@ -253,6 +253,14 @@ ATTACK_SETS = {
         "none", "jpeg", "jpeg_real", "blur", "median_blur", "noise",
         "resize", "combined",
     ],
+    # benigno_forte: o benigno_realista mais os ataques fortes da avaliação,
+    # para testar se a semi-frágil consegue aguentá-los sem deixar de quebrar
+    # nos deepfakes: JPEG 30-95, resize 0,3-0,9, dropout até 0,2 e
+    # salt & pepper até 5%.
+    "benigno_forte": [
+        "none", "jpeg", "jpeg_real", "blur", "median_blur", "noise",
+        "resize", "combined", "dropout", "salt_pepper",
+    ],
 }
 
 
@@ -633,6 +641,22 @@ class AttackLayer(nn.Module):
                     kernel = 3
                 elif attack == "noise" and std is None:
                     std = random.uniform(0.01, 0.03)
+
+            # leves como no benigno_realista, mas JPEG, resize, dropout e
+            # salt & pepper vão até a força dos ataques fortes da avaliação
+            elif self.attack_set == "benigno_forte":
+                if attack in ("jpeg", "jpeg_real") and quality is None:
+                    quality = random.randint(30, 95)
+                elif attack == "resize" and scale is None:
+                    scale = random.uniform(0.3, 0.9)
+                elif attack == "median_blur" and kernel is None:
+                    kernel = 3
+                elif attack == "noise" and std is None:
+                    std = random.uniform(0.01, 0.03)
+                elif attack == "dropout" and p is None:
+                    p = random.uniform(0.03, 0.2)
+                elif attack == "salt_pepper" and amount is None:
+                    amount = random.uniform(0.01, 0.05)
 
             # parâmetros sorteados do conjunto v2 (o v1 usa os padrões antigos)
             elif self.attack_set != "v1":

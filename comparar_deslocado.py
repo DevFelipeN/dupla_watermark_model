@@ -101,7 +101,7 @@ def main():
     p.add_argument("--pontos", default="pontos_scrfd/val.npz")
     p.add_argument("--num_images", type=int, default=500)
     p.add_argument("--batch_size", type=int, default=16)
-    p.add_argument("--limiar", type=float, default=0.8)
+    p.add_argument("--limiar", type=float, default=0.75, help="Concordância abaixo da qual a imagem é alterada (0,75 = pelo menos 23 de 30 bits)")
     p.add_argument("--output", default="results/comparar_deslocado")
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()

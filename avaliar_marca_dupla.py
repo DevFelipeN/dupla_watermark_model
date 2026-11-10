@@ -141,8 +141,8 @@ def main():
     parser.add_argument("--celeba_val_dir", default="Dataset/celeba_hq/val")
     parser.add_argument("--output", default="results/marca_dupla")
     parser.add_argument("--num_images", type=int, default=200)
-    parser.add_argument("--limiar", type=float, default=0.8,
-                        help="Concordância da semi-frágil abaixo disso = imagem alterada")
+    parser.add_argument("--limiar", type=float, default=0.75,
+                        help="Concordância da semi-frágil abaixo disso = imagem alterada (0,75 = pelo menos 23 de 30 bits)")
     parser.add_argument("--alpha", type=float, default=None, help="Alpha da semi-frágil (padrão: o do checkpoint)")
     parser.add_argument("--sem_deepfakes", action="store_true", help="Só os 16 ataques (rápido)")
     parser.add_argument("--deepfakes", default=",".join(DEEPFAKES), help="Deepfakes a rodar, separados por vírgula")
