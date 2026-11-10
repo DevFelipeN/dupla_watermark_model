@@ -183,6 +183,16 @@ python comparar_deslocado.py --num_images 500 --fixa <semi-frágil com elipse fi
 
 As mesmas imagens de validação passam por quatro cenários **antes** de serem marcadas, como se fossem outras fotos: `original`, `deslocado` (rosto até ±40 px fora do lugar), `rosto 75%` e `rosto 50%` (imagem reduzida, girada até ±15° e deslocada). Em cada cenário, mede o alarme falso em 5 ataques comuns e a detecção nas 7 manipulações do treino, feitas no rosto verdadeiro. Sem argumentos, avalia só o modelo atual; `--fixa` e `--scrfd` acrescentam modelos para comparar. Saída: `resultados.csv` e a tabela de % de imagens acusadas de alteradas no terminal.
 
+### Análise de Fourier e ataque espectral
+
+```bash
+python analise_fourier.py --num_images 500 --output results/analise_fourier
+```
+
+- **Espectro das marcas:** FFT 2D do resíduo de cada marca na luminância (robusta, semi-frágil e as duas juntas), com a média de todas as imagens. Gera `espectro_medio.png`, `perfil_radial.png` (potência por frequência) e `sobrevivencia.png` (quanto da semi-frágil sobra depois de JPEG, resize e blur, por frequência), e mede se há picos (`resumo_espectro.csv`).
+- **Ataque espectral:** o atacante estima, na primeira metade das imagens, as frequências com maior razão marca/imagem e zera de 1% a 90% delas na segunda metade. Mede as duas marcas e o PSNR da imagem atacada (`ataque_espectral.csv`).
+- Leva poucos minutos com 500 imagens.
+
 ### Marcar uma imagem e ver a diferença
 
 ```bash
@@ -328,6 +338,39 @@ A semi-frágil custa ≈1,6 dB de PSNR, concentrados no rosto. A linha "só robu
 - `edita_regiao` (troca só de olhos, boca ou nariz) é a manipulação menos detectada: 17,6%. Com o treino só com edições leves eram ≈30%; treinar com os ataques fortes deixou a marca um pouco mais resistente a alterações pequenas.
 - O script também testa rostos reduzidos a 75% e 50% (fora do escopo, porque a elipse não muda de tamanho): com 75% os resultados são parecidos com os do rosto no lugar; com 50%, o alarme falso sobe (até 31% no resize 0,5) e a detecção cai.
 
+### Análise de Fourier (`analise_fourier.py`, 500 imagens)
+
+![Espectro médio da imagem e dos resíduos das marcas](my_tests/analise_fourier/espectro_medio.png)
+
+![Potência por frequência](my_tests/analise_fourier/perfil_radial.png)
+
+| | Pico / mediana | Energia no 1% de frequências mais fortes | Frequência mediana da energia |
+|---|---|---|---|
+| Imagem original | 1.216.065 | 93,7% | 0,008 ciclo/px |
+| Resíduo da robusta | 30 | 9,8% | 0,35 ciclo/px |
+| Resíduo da semi-frágil | 25 | 9,3% | 0,35 ciclo/px |
+
+- **Sem picos:** a energia das marcas é espalhada (as 1% de frequências mais fortes têm só ≈10% da energia, contra 94% numa imagem natural). Não há o padrão em grade da v1, e a marca não pode ser apagada filtrando algumas frequências isoladas.
+- **Faixa:** as duas marcas ficam mais fortes entre 0,1 e 0,17 ciclo/px, com um patamar de 0,35 a 0,55, com leve orientação diagonal. Em todas as frequências ficam 100 a 1000 vezes abaixo da potência da própria imagem (por isso são invisíveis). A robusta e a semi-frágil ocupam as mesmas frequências; a semi-frágil tem 3 a 4 vezes menos potência.
+
+![Quanto da semi-frágil sobrevive a cada ataque](my_tests/analise_fourier/sobrevivencia.png)
+
+- **Por que JPEG 30 e resize 0,3 ainda quebram a semi-frágil:** resize e blur apagam 85–90% da potência dela a partir de 0,15 ciclo/px, justamente a faixa onde ela fica; o JPEG apaga sobretudo a faixa de 0,5–0,6 ciclo/px, mais forte quanto menor a qualidade. (Nas faixas em que a curva do JPEG passa de 1, o que aparece é o ruído de quantização do próprio JPEG, não a marca.)
+
+**Ataque espectral.** Atacante forte: ele tem pares original/marcada para estimar as frequências da marca (250 imagens) e ataca outras 250, zerando as frequências com maior razão marca/imagem em R, G e B.
+
+| Frequências removidas | Robusta: bits certos | Robusta: marca exata | Semi-frágil: alterada | PSNR atacada × dupla |
+|---|---|---|---|---|
+| 0–20% | 100% | 100% | 0% | ≥ 46,6 dB |
+| 40% | 100% | 100% | 0,4% | 42,4 dB |
+| 60% | 98,0% | 59,2% | 11,6% | 36,4 dB |
+| 80% | 76,6% | 0% | 96,4% | 31,8 dB |
+| 90% | 61,5% | 0% | 99,6% | 29,6 dB |
+
+- Até 40% das frequências removidas, nenhuma das duas marcas é afetada. A robusta só some com 80% removido, com a imagem em ≈32 dB (estrago parecido com o de um JPEG 30).
+- Com estrago parecido, esse ataque é mais eficaz contra a robusta que os ataques comuns: JPEG 30 (32,9 dB) ainda deixa 95,5% dos bits certos e resize 0,3 (30,0 dB), 98,3%; o ataque espectral com 80% removido deixa 76,6%.
+- A semi-frágil apagada faz a imagem ser acusada de **alterada**: o ataque não serve para falsificar uma imagem como autêntica.
+
 ### Aparência das marcas
 
 ![Original, duas marcas e diferenças](my_tests/marca_dupla_alpha5_003251/comparacao_marca_dupla.png)
@@ -341,6 +384,7 @@ A semi-frágil custa ≈1,6 dB de PSNR, concentrados no rosto. A linha "só robu
 - **Pontos do rosto calculados antes:** a avaliação e o treino usam os pontos do SCRFD salvos em `pontos_scrfd/`. Uma imagem sem pontos salvos recebe a posição média (a mesma da elipse fixa). Em uso real, o detector precisa rodar na hora, em cada imagem nova.
 - **Tamanho do rosto:** a elipse só é deslocada, não muda de tamanho. Rostos muito menores ou maiores que os do CelebA-HQ ficam fora do escopo.
 - **LivePortrait** continua sendo o caso mais difícil para a robusta (85% de Bit Accuracy).
+- **Remoção espectral:** a marca ocupa uma faixa de frequências fixa (0,1–0,55 ciclo/px, diagonal) que pode ser estimada. Um atacante com pares original/marcada remove a robusta degradando a imagem a ≈32 dB, menos do que precisaria com JPEG ou resize.
 
 ## Arquivos principais
 
@@ -353,6 +397,7 @@ A semi-frágil custa ≈1,6 dB de PSNR, concentrados no rosto. A linha "só robu
 | `train_fragil.py` | treino da semi-frágil com a robusta congelada |
 | `avaliar_marca_dupla.py` | avaliação da marca dupla (origem + detecção) com 16 ataques e, opcionalmente, 7 deepfakes |
 | `comparar_deslocado.py` | avaliação com o rosto fora do centro (deslocado, reduzido e girado) |
+| `analise_fourier.py` | espectro de Fourier das marcas e ataque de remoção espectral |
 | `attacks.py` | ataques da versão 3 + os conjuntos da semi-frágil (`benigno`, `benigno_realista` e `benigno_forte`) |
 | `watermark_embedding.py`, `watermark_extraction.py` | redes de marcação e extração (as mesmas da versão 3: sem SE, com a escala fixa da entrada) |
 | `deepfake_attack.py` | chamada dos modelos de deepfake externos |
